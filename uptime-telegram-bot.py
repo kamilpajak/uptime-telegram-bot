@@ -4,10 +4,12 @@ Uptime Kuma Telegram Bot - Advanced ISP vs Power Outage Analyzer
 Receives webhooks from Uptime Kuma and provides intelligent analysis via Telegram
 """
 
+import os
 import json
 import sqlite3
 import asyncio
 from datetime import datetime, timedelta
+from pathlib import Path
 
 # Fix for Python 3.12 sqlite3 datetime deprecation
 sqlite3.register_adapter(datetime, lambda val: val.isoformat())
@@ -22,15 +24,28 @@ import threading
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 import logging
+from dotenv import load_dotenv
 
-# Configuration
+# Load environment variables
+load_dotenv()
+
+# Get project directory
+PROJECT_DIR = Path(__file__).parent
+
+# Configuration from environment variables
 CONFIG = {
-    'TELEGRAM_BOT_TOKEN': '8268874358:AAFQNONXpMtColoouOxQ9ZQb-u_bh2zrUzs',  # Your bot token
-    'TELEGRAM_CHAT_ID': '463207859',      # Your chat ID
-    'WEBHOOK_PORT': 5000,
-    'DB_PATH': '/home/jacoren/projects/uptime-telegram-bot/uptime_monitor.db',
-    'ANALYSIS_WINDOW': 5,  # minutes to analyze for patterns
+    'TELEGRAM_BOT_TOKEN': os.getenv('TELEGRAM_BOT_TOKEN'),
+    'TELEGRAM_CHAT_ID': os.getenv('TELEGRAM_CHAT_ID'),
+    'WEBHOOK_PORT': int(os.getenv('WEBHOOK_PORT', '5000')),
+    'DB_PATH': os.getenv('DB_PATH', str(PROJECT_DIR / 'uptime_monitor.db')),
+    'ANALYSIS_WINDOW': int(os.getenv('ANALYSIS_WINDOW', '5')),
 }
+
+# Validate required configuration
+if not CONFIG['TELEGRAM_BOT_TOKEN']:
+    raise ValueError("TELEGRAM_BOT_TOKEN is required. Set it in .env file")
+if not CONFIG['TELEGRAM_CHAT_ID']:
+    raise ValueError("TELEGRAM_CHAT_ID is required. Set it in .env file")
 
 # Logging setup
 logging.basicConfig(

@@ -52,16 +52,25 @@ pip install -r requirements.txt
 
 ### 3. Configure Bot
 
-Edit `uptime-telegram-bot.py` and update:
+Copy the example environment file and edit it:
 
-```python
-CONFIG = {
-    'TELEGRAM_BOT_TOKEN': 'YOUR_BOT_TOKEN',  # From @BotFather
-    'TELEGRAM_CHAT_ID': 'YOUR_CHAT_ID',      # Your Telegram user ID
-    'WEBHOOK_PORT': 5000,                    # Port for webhook server
-    'DB_PATH': '/home/jacoren/projects/uptime-telegram-bot/uptime_monitor.db',  # Database location
-    'ANALYSIS_WINDOW': 5,  # minutes to analyze for patterns
-}
+```bash
+cp .env.example .env
+nano .env  # or use your preferred editor
+```
+
+Update the values in `.env`:
+
+```env
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN_HERE  # From @BotFather
+TELEGRAM_CHAT_ID=YOUR_CHAT_ID_HERE      # Your Telegram user ID
+
+# Webhook Configuration
+WEBHOOK_PORT=5000
+
+# Analysis Settings
+ANALYSIS_WINDOW=5
 ```
 
 ### 4. Get Telegram Credentials
@@ -185,7 +194,8 @@ uptime-telegram-bot/
 
 ## Security Notes
 
-- Keep your bot token secret
+- Keep your bot token secret - never commit `.env` file to git
+- The `.env` file is gitignored by default
 - Use local webhook (localhost) to prevent external access
 - Database contains monitoring history only, no sensitive data
 
@@ -195,6 +205,7 @@ uptime-telegram-bot/
 - `flask` - Webhook server
 - `flask-cors` - CORS support
 - `nest-asyncio` - Async event loop compatibility
+- `python-dotenv` - Environment variable management
 
 ## License
 
