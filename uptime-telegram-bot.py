@@ -244,6 +244,74 @@ class TelegramNotifier:
         self.last_notification = {}
         self.notification_cooldown = 300  # 5 minutes cooldown for same type
     
+    async def send_test_confirmation(self):
+        """Send test confirmation message"""
+        message = """
+✅ **WEBHOOK TEST SUCCESSFUL**
+━━━━━━━━━━━━━━━━━━━━
+🔗 Uptime Kuma connected successfully!
+🤖 Bot is ready to monitor your services.
+⏰ Time: {}
+
+Your monitoring setup is working correctly.
+━━━━━━━━━━━━━━━━━━━━
+""".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        
+        await self.bot.send_message(
+            chat_id=self.chat_id,
+            text=message,
+            parse_mode='Markdown'
+        )
+    
+    async def send_recovery(self, event: MonitorEvent):
+        """Send recovery notification with downtime duration"""
+        # Get last down event for this monitor
+        conn = sqlite3.connect(self.db.db_path, detect_types=sqlite3.PARSE_DECLTYPES)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT timestamp FROM events 
+            WHERE monitor_name = ? AND status = 'down' 
+            ORDER BY timestamp DESC LIMIT 1
+        ''', (event.monitor_name,))
+        
+        down_event = cursor.fetchone()
+        conn.close()
+        
+        downtime_str = ""
+        if down_event:
+            down_time = down_event[0]
+            if isinstance(down_time, str):
+                down_time = datetime.fromisoformat(down_time)
+            duration = datetime.now() - down_time
+            minutes = int(duration.total_seconds() / 60)
+            seconds = int(duration.total_seconds() % 60)
+            
+            if minutes > 0:
+                downtime_str = f"\n⏱️ **Downtime:** {minutes}m {seconds}s"
+            else:
+                downtime_str = f"\n⏱️ **Downtime:** {seconds}s"
+            
+            downtime_str += f"\n🔻 **Down since:** {down_time.strftime('%H:%M:%S')}"
+            downtime_str += f"\n🔺 **Up at:** {datetime.now().strftime('%H:%M:%S')}"
+        
+        message = f"""
+✅ **SERVICE RECOVERED**
+━━━━━━━━━━━━━━━━━━━━
+🔧 **Service:** {event.monitor_name}
+📊 **Status:** Back Online{downtime_str}
+⚡ **Response Time:** {event.response_time:.1f}ms
+
+Service is operational again.
+━━━━━━━━━━━━━━━━━━━━
+"""
+        
+        await self.bot.send_message(
+            chat_id=self.chat_id,
+            text=message,
+            parse_mode='Markdown'
+        )
+    
     async def send_alert(self, event: MonitorEvent, analysis: Dict):
         """Send formatted alert to Telegram"""
         
@@ -281,7 +349,7 @@ class TelegramNotifier:
 ━━━━━━━━━━━━━━━━━━━━
 📊 **Severity:** {severity}
 🎯 **Confidence:** {analysis['confidence']*100:.0f}%
-⏰ **Time:** {now.strftime('%Y-%m-%d %H:%M:%S')}
+⏰ **Detected at:** {now.strftime('%Y-%m-%d %H:%M:%S')}
 
 📝 **Analysis:**
 {analysis['reason']}
@@ -334,18 +402,36 @@ def receive_webhook():
     """Receive webhook from Uptime Kuma"""
     try:
         data = request.json
+        logger.info(f"Webhook received: {json.dumps(data)}")  # Debug log
         
-        # Parse webhook data
+        # Check if this is a test notification from Uptime Kuma
+        is_test = (
+            data.get('msg', '').lower().find('testing') >= 0 or
+            (data.get('heartbeat') is None and data.get('monitor') is None)
+        )
+        
+        # If it's a test, send confirmation and return
+        if is_test:
+            asyncio.run(telegram_notifier.send_test_confirmation())
+            return jsonify({'status': 'success', 'message': 'Test notification sent'}), 200
+        
+        # Parse webhook data for real alerts
+        heartbeat = data.get('heartbeat', {})
+        monitor = data.get('monitor', {})
+        
         event = MonitorEvent(
-            monitor_name=data.get('monitorName', 'Unknown'),
-            status=data.get('status', 'unknown'),
+            monitor_name=monitor.get('name', 'Unknown'),
+            status='down' if heartbeat.get('status') == 0 else 'up',
             timestamp=datetime.now(),
             message=data.get('msg', ''),
-            response_time=data.get('ping', 0.0)
+            response_time=heartbeat.get('ping', 0.0)
         )
         
         # Store event
         db_manager.add_event(event)
+        
+        # Check if this is a recovery (service back up)
+        is_recovery = event.status == 'up' and data.get('msg', '').lower().find('up') >= 0
         
         # Analyze pattern
         recent_events = db_manager.get_recent_events(CONFIG['ANALYSIS_WINDOW'])
@@ -355,6 +441,8 @@ def receive_webhook():
         # Send notification if needed
         if analysis['type'] != 'ALL_OPERATIONAL':
             asyncio.run(telegram_notifier.send_alert(event, analysis))
+        elif is_recovery:
+            asyncio.run(telegram_notifier.send_recovery(event))
         
         return jsonify({'status': 'success', 'analysis': analysis}), 200
     
@@ -466,6 +554,85 @@ async def cmd_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(uptime_text, parse_mode='Markdown')
 
+async def cmd_downtime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /downtime command - show recent outages with durations"""
+    conn = sqlite3.connect(CONFIG['DB_PATH'], detect_types=sqlite3.PARSE_DECLTYPES)
+    cursor = conn.cursor()
+    
+    # Get recent down/up pairs
+    cursor.execute('''
+        SELECT monitor_name, status, timestamp 
+        FROM events 
+        WHERE timestamp > datetime('now', '-24 hours')
+        ORDER BY timestamp DESC
+        LIMIT 50
+    ''')
+    
+    events = cursor.fetchall()
+    conn.close()
+    
+    # Process events to find down/up pairs
+    outages = []
+    down_events = {}
+    
+    for monitor, status, timestamp in reversed(events):
+        if isinstance(timestamp, str):
+            timestamp = datetime.fromisoformat(timestamp)
+            
+        if status == 'down':
+            down_events[monitor] = timestamp
+        elif status == 'up' and monitor in down_events:
+            duration = timestamp - down_events[monitor]
+            minutes = int(duration.total_seconds() / 60)
+            seconds = int(duration.total_seconds() % 60)
+            
+            outages.append({
+                'monitor': monitor,
+                'down': down_events[monitor],
+                'up': timestamp,
+                'duration_str': f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+            })
+            del down_events[monitor]
+    
+    # Add ongoing outages
+    for monitor, down_time in down_events.items():
+        duration = datetime.now() - down_time
+        minutes = int(duration.total_seconds() / 60)
+        seconds = int(duration.total_seconds() % 60)
+        
+        outages.append({
+            'monitor': monitor,
+            'down': down_time,
+            'up': None,
+            'duration_str': f"{minutes}m {seconds}s (ongoing)" if minutes > 0 else f"{seconds}s (ongoing)"
+        })
+    
+    # Format message
+    if not outages:
+        downtime_text = """
+📊 **24-HOUR DOWNTIME REPORT**
+━━━━━━━━━━━━━━━━━━━━
+
+✅ No outages in the last 24 hours!
+━━━━━━━━━━━━━━━━━━━━
+"""
+    else:
+        downtime_text = """
+📊 **24-HOUR DOWNTIME REPORT**
+━━━━━━━━━━━━━━━━━━━━
+"""
+        for outage in outages[-10:]:  # Show last 10 outages
+            downtime_text += f"\n**{outage['monitor']}**\n"
+            downtime_text += f"🔻 Down: {outage['down'].strftime('%H:%M:%S')}\n"
+            if outage['up']:
+                downtime_text += f"🔺 Up: {outage['up'].strftime('%H:%M:%S')}\n"
+            downtime_text += f"⏱️ Duration: {outage['duration_str']}\n"
+            downtime_text += "─────────────────\n"
+        
+        downtime_text += "━━━━━━━━━━━━━━━━━━━━"
+    
+    await update.message.reply_text(downtime_text, parse_mode='Markdown')
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
     help_text = """
@@ -476,6 +643,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • /status - Current system status
 • /report - 24-hour detailed report
 • /uptime - 7-day uptime percentages
+• /downtime - Recent outages with durations
 • /help - Show this help message
 
 **Alert Types:**
@@ -514,21 +682,22 @@ def run_telegram_bot():
         db_manager
     )
     
-    # Initialize Telegram bot
-    telegram_app = Application.builder().token(CONFIG['TELEGRAM_BOT_TOKEN']).build()
+    # Initialize Telegram bot with concurrent_updates=False to prevent duplicate responses
+    telegram_app = Application.builder().token(CONFIG['TELEGRAM_BOT_TOKEN']).concurrent_updates(False).build()
     
     # Add command handlers
     telegram_app.add_handler(CommandHandler("status", cmd_status))
     telegram_app.add_handler(CommandHandler("report", cmd_report))
     telegram_app.add_handler(CommandHandler("uptime", cmd_uptime))
+    telegram_app.add_handler(CommandHandler("downtime", cmd_downtime))
     telegram_app.add_handler(CommandHandler("help", cmd_help))
     telegram_app.add_handler(CommandHandler("start", cmd_help))
     
     logger.info(f"🚀 Bot started! Webhook on port {CONFIG['WEBHOOK_PORT']}")
     logger.info("📱 Telegram bot ready for commands")
     
-    # Start bot polling
-    telegram_app.run_polling()
+    # Start bot polling with drop_pending_updates to ignore old messages
+    telegram_app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     # Start Flask in separate thread

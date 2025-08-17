@@ -14,11 +14,14 @@ Advanced monitoring bot that analyzes Uptime Kuma alerts to distinguish between 
   - 5-minute cooldown to prevent spam
   - Confidence scoring for analysis accuracy
   - Specific recommendations for each issue type
+  - Recovery notifications with downtime duration
+  - Test webhook confirmations
 
 - **Telegram Commands**
   - `/status` - Current system status and analysis
   - `/report` - 24-hour detailed report
   - `/uptime` - 7-day uptime percentages
+  - `/downtime` - Recent outages with duration details
   - `/help` - Show available commands
 
 - **Data Persistence**
@@ -116,10 +119,11 @@ sudo systemctl status uptime-telegram-bot
 1. Open Uptime Kuma web interface
 2. Go to **Settings** → **Notifications**
 3. Add new **Webhook** notification:
-   - **URL**: `http://localhost:5000/webhook`
+   - **URL**: `http://172.17.0.1:5000/webhook` (for Docker) or `http://localhost:5000/webhook` (for local)
    - **Method**: POST
    - **Content Type**: application/json
-4. Assign notification to your monitors
+4. Test the webhook connection
+5. Assign notification to your monitors (minimum 3 recommended: Router + 2 external services)
 
 ## How It Works
 
@@ -134,14 +138,15 @@ The bot analyzes patterns to determine outage types:
 | ❌ DOWN | ✅ UP | Router Failure (80% confidence) |
 | ✅ UP | ✅ UP | All Operational |
 
-### Alert Format
+### Alert Formats
 
+#### Outage Alert
 ```
 🌐 ISP OUTAGE DETECTED
 ━━━━━━━━━━━━━━━━━━━━
 📊 Severity: HIGH
 🎯 Confidence: 90%
-⏰ Time: 2025-08-17 14:23:45
+⏰ Detected at: 2025-08-17 14:23:45
 
 📝 Analysis:
 Internet services down but router is up
@@ -149,23 +154,39 @@ Internet services down but router is up
 🔍 Affected Services:
 • Google DNS
 • Cloudflare DNS
-• External websites
 
 💡 Recommendation:
 Contact ISP for service status.
+```
+
+#### Recovery Notification
+```
+✅ SERVICE RECOVERED
+━━━━━━━━━━━━━━━━━━━━
+🔧 Service: Google DNS
+📊 Status: Back Online
+⏱️ Downtime: 5m 23s
+🔻 Down since: 21:43:15
+🔺 Up at: 21:48:38
+⚡ Response Time: 21.9ms
+
+Service is operational again.
 ```
 
 ## File Structure
 
 ```
 uptime-telegram-bot/
-├── uptime-telegram-bot.py    # Main bot application
-├── requirements.txt           # Python dependencies
-├── venv/                     # Virtual environment
-├── uptime_monitor.db         # SQLite database (created on first run)
+├── uptime-telegram-bot.py      # Main bot application
+├── requirements.txt             # Python dependencies
+├── .env                        # Environment variables (not in git)
+├── .env.example                # Example environment file
+├── venv/                       # Virtual environment
+├── uptime_monitor.db           # SQLite database (created on first run)
 ├── uptime-telegram-bot.service # Systemd service file
-├── setup-telegram-bot.sh     # Setup helper script
-└── README.md                 # This file
+├── setup-telegram-bot.sh       # Setup helper script
+├── .gitignore                  # Git ignore file
+└── README.md                   # This file
 ```
 
 ## Monitoring Best Practices
