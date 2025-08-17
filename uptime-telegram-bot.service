@@ -1,0 +1,15 @@
+[Unit]
+Description=Uptime Kuma Telegram Bot with ISP Analysis
+After=network.target
+
+[Service]
+Type=simple
+User=jacoren
+WorkingDirectory=/home/jacoren/projects/uptime-telegram-bot
+Environment="PATH=/home/jacoren/projects/uptime-telegram-bot/venv/bin:/usr/bin:/usr/local/bin"
+ExecStart=/home/jacoren/projects/uptime-telegram-bot/venv/bin/python /home/jacoren/projects/uptime-telegram-bot/uptime-telegram-bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
