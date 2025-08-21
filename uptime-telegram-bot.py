@@ -164,6 +164,7 @@ class OutageAnalyzer:
     
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
+        self.router_restart_grace_period = int(os.getenv('ROUTER_RESTART_GRACE_PERIOD', '120'))  # 2 minutes default
     
     def analyze_pattern(self, recent_events: List[Dict]) -> Dict:
         """Analyze events to determine outage type"""
@@ -171,10 +172,25 @@ class OutageAnalyzer:
         if not recent_events:
             return {'type': 'UNKNOWN', 'confidence': 0.0, 'reason': 'No recent events'}
         
-        # Group events by monitor
+        # Group events by monitor and time
         monitor_status = defaultdict(list)
+        monitor_timeline = defaultdict(list)
         for event in recent_events:
             monitor_status[event['monitor_name']].append(event['status'])
+            monitor_timeline[event['monitor_name']].append({
+                'status': event['status'],
+                'timestamp': event['timestamp']
+            })
+        
+        # Check if this might be a router restart
+        if self._is_router_restart_pattern(monitor_timeline):
+            return {
+                'type': 'ROUTER_RESTART',
+                'confidence': 0.85,
+                'reason': 'Router is restarting (temporary outage)',
+                'affected': ['Router 192.168.1.1'],
+                'is_temporary': True
+            }
         
         # Check status patterns
         router_down = self._is_monitor_down(monitor_status.get('Router 192.168.1.1', []))
@@ -232,6 +248,53 @@ class OutageAnalyzer:
             return False
         # If last status is down or majority of recent statuses are down
         return statuses[0] == 'down' or statuses.count('down') > len(statuses) / 2
+    
+    def _is_router_restart_pattern(self, monitor_timeline: Dict) -> bool:
+        """Detect if this is a router restart pattern"""
+        router_events = monitor_timeline.get('Router 192.168.1.1', [])
+        
+        if not router_events:
+            return False
+        
+        # Check if router went down and came back up within grace period
+        down_time = None
+        up_time = None
+        
+        for event in sorted(router_events, key=lambda x: x['timestamp']):
+            if event['status'] == 'down' and down_time is None:
+                down_time = event['timestamp']
+            elif event['status'] == 'up' and down_time is not None:
+                up_time = event['timestamp']
+                break
+        
+        if down_time and up_time:
+            # Calculate downtime duration
+            downtime_seconds = (up_time - down_time).total_seconds()
+            
+            # If downtime is less than grace period, it's likely a restart
+            if downtime_seconds <= self.router_restart_grace_period:
+                return True
+        
+        # Also check if router just went down (might be starting a restart)
+        if router_events and router_events[-1]['status'] == 'down':
+            # Check if downtime just started (within last minute)
+            time_since_down = (datetime.now() - router_events[-1]['timestamp']).total_seconds()
+            if time_since_down <= 60:
+                # Check if other services are also starting to fail (cascade effect)
+                cascade_count = 0
+                for monitor, events in monitor_timeline.items():
+                    if monitor != 'Router 192.168.1.1' and events:
+                        last_event = events[-1]
+                        if last_event['status'] == 'down':
+                            time_diff = abs((last_event['timestamp'] - router_events[-1]['timestamp']).total_seconds())
+                            if time_diff <= 30:  # Within 30 seconds of router going down
+                                cascade_count += 1
+                
+                # If multiple services failed right after router, it's likely a restart
+                if cascade_count >= 2:
+                    return True
+        
+        return False
 
 class TelegramNotifier:
     """Handles Telegram notifications"""
@@ -440,7 +503,11 @@ def receive_webhook():
         
         # Send notification if needed
         if analysis['type'] != 'ALL_OPERATIONAL':
-            asyncio.run(telegram_notifier.send_alert(event, analysis))
+            # Don't send alert for router restart (temporary issue)
+            if analysis['type'] != 'ROUTER_RESTART':
+                asyncio.run(telegram_notifier.send_alert(event, analysis))
+            else:
+                logger.info(f"Router restart detected - suppressing alert")
         elif is_recovery:
             asyncio.run(telegram_notifier.send_recovery(event))
         

@@ -42,7 +42,7 @@ Advanced monitoring bot that analyzes Uptime Kuma alerts to distinguish between 
 ### 1. Clone or Copy Project
 
 ```bash
-cd /home/jacoren/projects/uptime-telegram-bot
+cd /path/to/uptime-telegram-bot
 ```
 
 ### 2. Setup Virtual Environment
@@ -94,7 +94,7 @@ ANALYSIS_WINDOW=5
 ### Manual Run
 
 ```bash
-cd /home/jacoren/projects/uptime-telegram-bot
+cd /path/to/uptime-telegram-bot
 source venv/bin/activate
 python3 uptime-telegram-bot.py
 ```
@@ -211,7 +211,7 @@ uptime-telegram-bot/
 ### Database issues
 - Database is created automatically on first run
 - To reset: delete `uptime_monitor.db` and restart
-- Location: `/home/jacoren/projects/uptime-telegram-bot/uptime_monitor.db`
+- Location: `./uptime_monitor.db` (in project directory)
 
 ## Security Notes
 
