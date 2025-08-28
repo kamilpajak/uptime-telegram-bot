@@ -94,8 +94,7 @@ class DatabaseManager:
                 start_time DATETIME NOT NULL,
                 end_time DATETIME,
                 duration_minutes INTEGER,
-                affected_monitors TEXT,
-                confidence_score REAL
+                affected_monitors TEXT
             )
         ''')
         
@@ -145,16 +144,16 @@ class DatabaseManager:
         return events
     
     def record_outage(self, outage_type: str, start_time: datetime, 
-                      affected_monitors: List[str], confidence: float):
+                      affected_monitors: List[str]):
         """Record analyzed outage"""
         conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES)
         cursor = conn.cursor()
         
         cursor.execute('''
             INSERT INTO outage_analysis 
-            (outage_type, start_time, affected_monitors, confidence_score)
-            VALUES (?, ?, ?, ?)
-        ''', (outage_type, start_time, json.dumps(affected_monitors), confidence))
+            (outage_type, start_time, affected_monitors)
+            VALUES (?, ?, ?)
+        ''', (outage_type, start_time, json.dumps(affected_monitors)))
         
         conn.commit()
         conn.close()
@@ -170,7 +169,7 @@ class OutageAnalyzer:
         """Analyze events to determine outage type"""
         
         if not recent_events:
-            return {'type': 'UNKNOWN', 'confidence': 0.0, 'reason': 'No recent events'}
+            return {'type': 'UNKNOWN', 'reason': 'No recent events'}
         
         # Group events by monitor and time
         monitor_status = defaultdict(list)
@@ -186,7 +185,6 @@ class OutageAnalyzer:
         if self._is_router_restart_pattern(monitor_timeline):
             return {
                 'type': 'ROUTER_RESTART',
-                'confidence': 0.85,
                 'reason': 'Router is restarting (temporary outage)',
                 'affected': ['Router 192.168.1.1'],
                 'is_temporary': True
@@ -205,22 +203,19 @@ class OutageAnalyzer:
             if dns_monitors_down >= 2 or external_sites_down >= 2:
                 return {
                     'type': 'POWER_OUTAGE',
-                    'confidence': 0.95,
-                    'reason': 'Router and external services are down',
+                    'reason': 'All infrastructure offline - likely power loss',
                     'affected': list(monitor_status.keys())
                 }
             else:
                 return {
                     'type': 'ROUTER_FAILURE',
-                    'confidence': 0.80,
-                    'reason': 'Only router is down',
+                    'reason': 'Router offline but external services accessible',
                     'affected': ['Router 192.168.1.1']
                 }
         elif dns_monitors_down >= 2 or external_sites_down >= 2:
             return {
                 'type': 'ISP_OUTAGE',
-                'confidence': 0.90,
-                'reason': 'Internet services down but router is up',
+                'reason': 'Router accessible but internet connectivity lost - ISP issue',
                 'affected': [name for name in monitor_status 
                             if self._is_monitor_down(monitor_status[name])]
             }
@@ -230,15 +225,13 @@ class OutageAnalyzer:
             if down_monitors:
                 return {
                     'type': 'PARTIAL_OUTAGE',
-                    'confidence': 0.70,
-                    'reason': f'Only specific services affected',
+                    'reason': f'Isolated service issues - {len(down_monitors)} service(s) affected',
                     'affected': down_monitors
                 }
             else:
                 return {
                     'type': 'ALL_OPERATIONAL',
-                    'confidence': 1.0,
-                    'reason': 'All services operational',
+                    'reason': 'All monitored services are responding normally',
                     'affected': []
                 }
     
@@ -411,7 +404,6 @@ Service is operational again.
 {icon} **{title}**
 ━━━━━━━━━━━━━━━━━━━━
 📊 **Severity:** {severity}
-🎯 **Confidence:** {analysis['confidence']*100:.0f}%
 ⏰ **Detected at:** {now.strftime('%Y-%m-%d %H:%M:%S')}
 
 📝 **Analysis:**
@@ -528,7 +520,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 **CURRENT STATUS**
 ━━━━━━━━━━━━━━━━━━━━
 🔍 **Analysis:** {analysis['type']}
-🎯 **Confidence:** {analysis['confidence']*100:.0f}%
 📝 **Details:** {analysis['reason']}
 
 📈 **Recent Events:** {len(recent_events)}
@@ -558,7 +549,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Get outage analysis
     cursor.execute('''
-        SELECT outage_type, COUNT(*) as count, AVG(confidence_score) as avg_confidence
+        SELECT outage_type, COUNT(*) as count
         FROM outage_analysis
         WHERE start_time > ?
         GROUP BY outage_type
@@ -582,7 +573,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     
     for outage in outages:
-        report_text += f"• {outage[0]}: {outage[1]} incidents (confidence: {outage[2]*100:.0f}%)\n"
+        report_text += f"• {outage[0]}: {outage[1]} incidents\n"
     
     report_text += "━━━━━━━━━━━━━━━━━━━━"
     
